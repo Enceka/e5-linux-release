@@ -91,7 +91,8 @@ jobs:
       - name: Install host tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y lz4 e2fsprogs binutils python3
+          sudo apt-get install -y lz4 e2fsprogs binutils python3 python3-venv libglib2.0-0t64 qemu-user-static binfmt-support
+          sudo update-binfmts --enable qemu-x86_64
       - name: Restore and verify bootstrap inputs
         env:
           INPUTS_URL: ${{ vars.E5_CI_INPUTS_URL }}
@@ -113,10 +114,21 @@ jobs:
           [ -n "$checksum" ] || { echo '::error::No checksum for OpenWrt rootfs'; exit 1; }
           printf '%s  %s\n' "$checksum" "work/openwrt/$file" | sha256sum --check
           docker import --platform linux/arm64 "work/openwrt/$file" "e5-openwrt-base:$E5_WRT_VER"
+          python3 tools/tests/android-bootchain.py
+          python3 device/openwrt_device_common/tests/block-probe.py
+          python3 device/openwrt_device_common/tests/userdata-size.py
           python3 device/openwrt_device_common/tests/flash-diagnostics.py
           E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" python3 device/openwrt_device_common/tests/gpt-plan.py
           python3 device/openwrt_device_common/tests/voice-audio.py
           python3 device/openwrt_device_common/tests/dual-sms.py
+          python3 device/openwrt_device_common/tests/sms-multipart.py
+          python3 device/openwrt_device_common/tests/power-events.py
+          python3 device/openwrt_device_common/tests/test_apn.py
+          python3 device/openwrt_device_common/tests/modem-port-discovery.py
+          python3 device/openwrt_device_common/tests/prepare-profiles.py
+          python3 ci/infoscreen/tests/device/test_screen_apn.py
+          python3 ci/infoscreen/tests/device/test_screen_session_startup.py
+          node ci/infoscreen/tests/device/test_calls_transport.cjs
           python3 device/openwrt_device_common/tests/dual-sms-send.py
           python3 device/openwrt_device_common/tests/sim-probe.py
           E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" python3 device/openwrt_device_common/tests/sim-lock.py
@@ -147,7 +159,7 @@ jobs:
           path: |
             e5-linux/out/openwrt/*.apk
             e5-linux/out/openwrt/e5-modemmanager-build.json
-          key: patched-apk-${{ runner.os }}-${{ runner.arch }}-${{ env.E5_WRT_VER }}-${{ hashFiles('e5-linux/tools/openwrt-package-state.py', 'e5-linux/device/openwrt_device_common/tests/voice-identity.py', 'e5-linux/device/openwrt_device_common/tests/sim-power.py', 'e5-linux/openwrt/build-modemmanager.sh', 'e5-linux/openwrt/build-bluez.sh', 'e5-linux/openwrt/patches/**', 'e5-linux/rootfs/deb-patches/modemmanager-*.patch', 'e5-linux/rootfs/deb-patches/bluez-*.patch') }}
+          key: patched-apk-${{ runner.os }}-${{ runner.arch }}-${{ env.E5_WRT_VER }}-${{ hashFiles('e5-linux/tools/openwrt-package-state.py', 'e5-linux/device/openwrt_device_common/tests/voice-identity.py', 'e5-linux/device/openwrt_device_common/tests/sim-power.py', 'e5-linux/openwrt/build-modemmanager.sh', 'e5-linux/openwrt/build-bluez.sh', 'e5-linux/openwrt/patches/**', 'e5-linux/device/debian_device_common/patches/modemmanager-*.patch', 'e5-linux/device/debian_device_common/patches/bluez-*.patch') }}
       - name: Compile patched ModemManager and BlueZ
         if: steps.packages.outputs.cache-hit != 'true'
         run: |
@@ -163,6 +175,27 @@ jobs:
             e5-linux/out/openwrt/*.apk
             e5-linux/out/openwrt/e5-modemmanager-build.json
           key: ${{ steps.packages.outputs.cache-primary-key }}
+      - name: Cache guarded block-mount APK
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: e5-linux/out/openwrt/block-mount-guarded.apk*
+          key: guarded-block-${{ runner.arch }}-${{ env.E5_WRT_VER }}-${{ hashFiles('e5-linux/openwrt/build-block-mount*.sh', 'e5-linux/openwrt/block-mount.Dockerfile', 'e5-linux/openwrt/block-probe-guard.h', 'e5-linux/openwrt/patches/fstools-probe-device-types.patch') }}
+      - name: Build and test guarded block-mount
+        run: |
+          sh openwrt/build-block-mount.sh
+          E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" E5_TEST_BLOCK_APK="$PWD/out/openwrt/block-mount-guarded.apk" python3 device/openwrt_device_common/tests/block-probe.py
+          docker run --rm -v "$PWD:/src:ro" "e5-openwrt-base:$E5_WRT_VER" sh -ec 'apk add -q ucode-mod-uci; ucode -L "/src/device/openwrt_device_common/luci-app-t551m/root/usr/libexec/unisoc-modem/*.uc" /src/device/openwrt_device_common/tests/apn.uc'
+      - name: Validate screen and LuCI browser flows
+        env:
+          MU300_BROWSER_TESTS: '1'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/browser-tests"
+          "$RUNNER_TEMP/browser-tests/bin/pip" install playwright==1.60.0
+          "$RUNNER_TEMP/browser-tests/bin/playwright" install --with-deps chromium
+          "$RUNNER_TEMP/browser-tests/bin/python" device/openwrt_device_common/tests/test_apn_browser.py
+          "$RUNNER_TEMP/browser-tests/bin/python" ci/infoscreen/tests/device/test_screen_apn_browser.py
+          "$RUNNER_TEMP/browser-tests/bin/python" device/openwrt_device_common/tests/screen-rpc.py
+          "$RUNNER_TEMP/browser-tests/bin/python" ci/infoscreen/tests/device/test_screen_charger_wake.py --fixtures ci/infoscreen/tests/fixtures/browser-status.json --webroot ci/infoscreen/root/usr/share/e5-infoscreen/www
       - name: Assemble the generic mainline flash bundles
         env:
           E5_MAINLINE: '1'
