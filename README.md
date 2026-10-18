@@ -69,3 +69,9 @@ build and retains validated artifacts without creating a GitHub Release.
 发布 workflow 已从 e5-linux 迁移到本仓库。手动构建可选择源码、内核和 OpenWrt 版本；
 设备与信息屏固定版本随源码检出，构建结果发布在本仓库的 Releases。
 历史发布仍保留在原源码仓库。先配置 bootstrap URL/SHA256，再执行发布工作流。
+
+The ARM64 runner installs a digest-pinned QEMU 9.2.2 emulator for the x86 SDK
+container. It builds that container before kernel compilation to verify APT
+signatures and executable host tools early. The runner's distribution QEMU 8.2.2
+produced false keyring errors in the Ubuntu 22.04 SDK image; signature validation
+remains enabled.
