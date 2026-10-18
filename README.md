@@ -32,6 +32,11 @@ to the verified bootstrap archive described in the source project's
 These public bootstrap variables are migrated from the source repository when available.
 No device firmware, credentials or vendor runtime is placed in this repository.
 
+The existing public bootstrap archive is hosted under
+[`sprd-linux-devs/e5-linux` → `build-inputs`](https://github.com/sprd-linux-devs/e5-linux/releases/tag/build-inputs).
+Use its current asset URL, not the retired `Enceka/e5-linux` owner path. The
+verified archive SHA-256 remains `b9a67fecd5393da8fae58457d841a73105e664af19b5355f3c71d922400536d6`.
+
 The workflow builds ARM64 OpenWrt flash ZIP/TAR.GZ bundles and the Android-to-Linux
 Magisk ZIP, validates source hashes/modules/archive integrity and the OpenSSL executable,
 and publishes through a draft release after checks pass. Published releases are not overwritten.
