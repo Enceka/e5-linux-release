@@ -75,3 +75,12 @@ container. It builds that container before kernel compilation to verify APT
 signatures and executable host tools early. The runner's distribution QEMU 8.2.2
 produced false keyring errors in the Ubuntu 22.04 SDK image; signature validation
 remains enabled.
+
+The guarded block-mount APK is saved immediately after its build, so a failing later
+step no longer discards that emulated SDK build.
+
+ModemManager, BlueZ and hostapd are built in one step against the same
+`e5-openwrt-src` tree, whose host tools belong to the runner's own architecture.
+Their APKs and the Wi-Fi APKs share one cache entry: a cache hit skips the whole
+step and the image assembly reuses the restored APKs instead of rebuilding hostapd
+in a fresh tree.
