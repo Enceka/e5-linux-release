@@ -24,6 +24,12 @@ chooses the kernel revision (default `e5-6.18`). The release tag belongs to
 this repository, and `build.json` records the actual e5-linux/kernel/device/screen commits.
 A workflow source hash is not used as the firmware source hash.
 
+The shared kernel fixes are committed on the existing `e5-6.18` branch. The source
+manifest `upstream/kernel-source.json` specifies the minimum revision, checked before
+compilation. Generic builds no longer apply kernel patches at runtime. Kernel versions
+keep the base version and device suffix without SCM/dirty suffixes; `build.json` still
+records the exact source commits. No additional kernel branch is required.
+
 ## Bootstrap variables
 
 Set repository Actions variables `E5_CI_INPUTS_URL` and `E5_CI_INPUTS_SHA256`
