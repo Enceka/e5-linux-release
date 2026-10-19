@@ -74,8 +74,39 @@ jobs:
         id: kernel
         run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-  build:
+  blockmount:
     needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: e5-linux
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ env.E5_SOURCE_REPOSITORY }}
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          path: e5-linux
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+      - name: Build the guarded block-mount
+        run: |
+          test "$(uname -m)" = x86_64
+          sh openwrt/build-block-mount.sh
+      - name: Upload the guarded block-mount APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: guarded-block-mount-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            e5-linux/out/openwrt/block-mount-guarded.apk
+            e5-linux/out/openwrt/block-mount-guarded.apk.sha256
+            e5-linux/out/openwrt/block-mount-guarded.apk.build-id
+          if-no-files-found: error
+          compression-level: 0
+
+  build:
+    needs: [resolve, blockmount]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 360
     defaults:
@@ -128,16 +159,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y lz4 e2fsprogs binutils busybox python3 python3-venv libglib2.0-0t64
-      - name: Set up pinned x86 container emulation
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - name: Restore the guarded block-mount APK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          image: tonistiigi/binfmt:qemu-v9.2.2@sha256:1b804311fe87047a4c96d38b4b3ef6f62fca8cd125265917a9e3dc3c996c39e6
-          platforms: amd64
-          reset: true
-      - name: Prepare and verify the x86 SDK container
+          name: guarded-block-mount-${{ github.run_id }}-${{ github.run_attempt }}
+          path: e5-linux/out/openwrt
+      - name: Verify the guarded block-mount APK
         run: |
-          docker build --platform linux/amd64 -t e5-block-sdk-build -f openwrt/block-mount.Dockerfile openwrt
-          docker run --rm --platform linux/amd64 e5-block-sdk-build sh -ec 'test "$(uname -m)" = x86_64; cc --version; python3 --version'
+          # The x86 job built this; refuse a file that is not the artifact
+          # its own build script verified.
+          test -s out/openwrt/block-mount-guarded.apk || { echo '::error::the block-mount artifact is empty'; exit 1; }
+          test -s out/openwrt/block-mount-guarded.apk.sha256 || { echo '::error::the block-mount artifact has no SHA-256'; exit 1; }
+          test -s out/openwrt/block-mount-guarded.apk.build-id || { echo '::error::the block-mount artifact has no build id'; exit 1; }
+          echo "$(cat out/openwrt/block-mount-guarded.apk.sha256)  out/openwrt/block-mount-guarded.apk" | sha256sum -c -
+          echo "block-mount build id: $(cat out/openwrt/block-mount-guarded.apk.build-id)"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -223,9 +258,6 @@ jobs:
             e5-linux/out/openwrt/e5-modemmanager-build.json
             e5-linux/work/wifi-sae
           key: ${{ steps.packages.outputs.cache-primary-key }}
-      - name: Build guarded block-mount
-        run: |
-          sh openwrt/build-block-mount.sh
       - name: Assemble the Landscape flash bundle
         env:
           E5_MAINLINE: '1'
