@@ -262,6 +262,10 @@ jobs:
         env:
           E5_MAINLINE: '1'
           E5_TOOLS_BUILD_IMAGE: e5-mainline-build
+          # This build-only workflow has no desktop installer jobs, so the
+          # package is source-only on purpose (installer/README.md); the
+          # release workflow supplies both GUI artifacts instead.
+          OPENWRT_GUI_OPTIONAL: '1'
         run: |
           set -o pipefail
           export E5_INFOSCREEN="$GITHUB_WORKSPACE/e5-linux/ci/infoscreen"
