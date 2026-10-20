@@ -20,11 +20,11 @@ on:
         required: true
       source_ref:
         description: e5-linux branch, tag or commit
-        default: e5-7.2-experiment
+        default: lts-experiment
         required: true
       kernel_ref:
         description: linux-lts-e5 branch, tag or commit (must carry the Landscape BPF options)
-        default: e5-7.2-experiment
+        default: e5-6.18
         required: true
       keep_diagnostics:
         description: Upload build logs and the kernel config even on success
@@ -40,10 +40,11 @@ concurrency:
 
 env:
   TZ: CST-8
-  # The 7.2 experiment lives in the maintainer's forks, so those are the
-  # defaults here; both remain repository variables, so a run against an
-  # upstream branch needs no workflow edit.  (The release workflow keeps its
-  # own sprd-linux-devs defaults.)
+  # The lts-experiment images are built from the maintainer's fork; the kernel
+  # needs no experiment branch (e5-6.18 already carries every Landscape BPF
+  # option).  Both remain repository variables, so a run against an upstream
+  # branch needs no workflow edit.  (The release workflow keeps its own
+  # sprd-linux-devs defaults.)
   E5_SOURCE_REPOSITORY: ${{ vars.E5_SOURCE_REPOSITORY || 'Enceka/e5-linux' }}
   E5_KERNEL_REPOSITORY: ${{ vars.E5_KERNEL_REPOSITORY || 'Enceka/linux' }}
   E5_WRT_VER: ${{ inputs.openwrt_version || '25.12.5' }}
@@ -61,7 +62,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: ${{ env.E5_SOURCE_REPOSITORY }}
-          ref: ${{ inputs.source_ref || 'e5-7.2-experiment' }}
+          ref: ${{ inputs.source_ref || 'lts-experiment' }}
           persist-credentials: false
       - name: Resolve the firmware source once
         id: source
@@ -69,7 +70,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: ${{ env.E5_KERNEL_REPOSITORY }}
-          ref: ${{ inputs.kernel_ref || 'e5-7.2-experiment' }}
+          ref: ${{ inputs.kernel_ref || 'e5-6.18' }}
           persist-credentials: false
       - name: Resolve the kernel source once
         id: kernel
@@ -148,12 +149,13 @@ jobs:
           python3 tools/device-layout.py check --system openwrt --model e5
           python3 tools/tests/device-layout.py
           python3 upstream/tests/test_kernel_source.py
-          # upstream/kernel-source.json pins the 6.18 release baseline; the
-          # 7.2 experiment shares no history with it, so this build uses
-          # upstream/kernel-source-7.2.json (E5_KERNEL_MANIFEST below).
+          # upstream/kernel-source.json pins the release baseline.  The
+          # lts-experiment build uses its own fragment and manifest so the
+          # release baseline stays untouched (E5_KERNEL_MANIFEST below); both
+          # carry the Landscape BPF options.
           test -z "$(git -C linux-lts-e5 status --porcelain --untracked-files=normal)"
           test "$(git -C linux-lts-e5 rev-parse HEAD)" = "${{ needs.resolve.outputs.kernel_sha }}"
-          E5_KERNEL_MANIFEST=upstream/kernel-source-7.2.json \
+          E5_KERNEL_MANIFEST=upstream/kernel-source-lts-experiment.json \
             python3 upstream/check-kernel-source.py linux-lts-e5
       - name: Record sources and UTC+8 compile start
         id: start
@@ -194,22 +196,24 @@ jobs:
         run: |
           bash -n upstream/build.sh openwrt/build-rootfs.sh openwrt/make-flash-bundle.sh
           # Landscape's documented checklist (landscape.whileaway.dev/zh/intro/requirements):
-          # every entry must be present in the E5 mainline config.  BPF_JIT_DEFAULT_ON and
-          # IPV6_SEG6_BPF are Kconfig defaults (ARCH_WANT_DEFAULT_BPF_JIT and SEG6_LWTUNNEL),
-          # so they are checked in the compiled config below instead.
+          # every entry must be present in the fragment this image builds with, which
+          # is e5-lts-experiment.config (the release baseline e5-mainline.config stays
+          # untouched).  BPF_JIT_DEFAULT_ON and IPV6_SEG6_BPF are Kconfig defaults
+          # (ARCH_WANT_DEFAULT_BPF_JIT and SEG6_LWTUNNEL), so they are checked in the
+          # compiled config below instead.
           for o in CONFIG_BPF_SYSCALL=y CONFIG_BPF_JIT=y CONFIG_BPF_UNPRIV_DEFAULT_OFF=y \
                    CONFIG_BPF_LSM=y CONFIG_BPF_EVENTS=y CONFIG_BPF_STREAM_PARSER=y \
                    CONFIG_CGROUP_BPF=y CONFIG_LWTUNNEL_BPF=y CONFIG_NETFILTER_BPF_LINK=y \
                    CONFIG_NETFILTER_XT_MATCH_BPF=m CONFIG_NET_CLS_BPF=y CONFIG_NET_ACT_BPF=m \
                    CONFIG_DEBUG_INFO_BTF=y CONFIG_IPV6_SEG6_LWTUNNEL=y; do
-            grep -qx "$o" upstream/e5-mainline.config ||
-              { echo "::error::upstream/e5-mainline.config lacks $o, which Landscape requires"; exit 1; }
+            grep -qx "$o" upstream/e5-lts-experiment.config ||
+              { echo "::error::upstream/e5-lts-experiment.config lacks $o, which Landscape requires"; exit 1; }
           done
-          grep -qx '# CONFIG_BPF_JIT_ALWAYS_ON is not set' upstream/e5-mainline.config ||
+          grep -qx '# CONFIG_BPF_JIT_ALWAYS_ON is not set' upstream/e5-lts-experiment.config ||
             { echo '::error::BPF_JIT_ALWAYS_ON must stay off (Landscape checklist)'; exit 1; }
-          grep -qx '# CONFIG_BPF_PRELOAD is not set' upstream/e5-mainline.config ||
+          grep -qx '# CONFIG_BPF_PRELOAD is not set' upstream/e5-lts-experiment.config ||
             { echo '::error::BPF_PRELOAD must stay off (Landscape checklist)'; exit 1; }
-          grep -qx '# CONFIG_HID_BPF is not set' upstream/e5-mainline.config ||
+          grep -qx '# CONFIG_HID_BPF is not set' upstream/e5-lts-experiment.config ||
             { echo '::error::HID_BPF must stay off (Landscape checklist)'; exit 1; }
       - name: Check the OpenWrt landscape integration
         run: |
@@ -219,7 +223,7 @@ jobs:
       - name: Compile the release kernel
         env:
           E5_RELEASE: '1'
-          E5_KERNEL_MANIFEST: upstream/kernel-source-7.2.json
+          E5_KERNEL_MANIFEST: upstream/kernel-source-lts-experiment.json
         run: bash upstream/build.sh
       - name: Check the compiled kernel config
         run: |
