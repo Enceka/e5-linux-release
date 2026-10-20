@@ -5,8 +5,8 @@ run-name: Landscape ${{ inputs.landscape_version || '0.26.3' }} · OpenWrt ${{ i
 # A build-only workflow: the source repositories are the same as the release
 # workflow's, but there are no GUI jobs (the desktop installers are unchanged
 # by a landscape image) and nothing is published.  It produces one bundle,
-# e5-openwrt-flash-<openwrt>-landscape-<timestamp>-<source>.tar.gz, plus its
-# .zip, into the run's artifacts.  Not triggered by tags.
+# e5-openwrt-flash-<openwrt>-landscape-<timestamp>-<source>.zip into the run's
+# artifacts.  Not triggered by tags.
 on:
   workflow_dispatch:
     inputs:
@@ -360,8 +360,10 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: landscape-openwrt-${{ github.run_id }}-${{ github.run_attempt }}
+          # One archive: the ZIP is what people download (Windows Explorer,
+          # Linux/macOS extractors and Magisk all take it), so the .tar.gz of the
+          # same tree is no longer built.
           path: |
-            e5-linux/out/openwrt/e5-openwrt-*-landscape-*.tar.gz
             e5-linux/out/openwrt/e5-openwrt-*-landscape-*.zip
           compression-level: 0
           if-no-files-found: error
@@ -373,7 +375,7 @@ jobs:
           path: |
             e5-linux/out/release/*.log
             e5-linux/upstream/out-release/config
-            e5-linux/out/openwrt/*landscape*.tar.gz.sha256
+            e5-linux/out/openwrt/*landscape*.zip.sha256
           if-no-files-found: ignore
 
       - name: Summarize
@@ -386,5 +388,5 @@ jobs:
             echo "- Landscape: \`$E5_LANDSCAPE_VER\`"
             echo "- OpenWrt: \`$E5_WRT_VER\`"
             echo
-            ls -l out/openwrt/*landscape*.tar.gz out/openwrt/*landscape*.zip 2>/dev/null || true
+            ls -l out/openwrt/*landscape*.zip 2>/dev/null || true
           } >> "$GITHUB_STEP_SUMMARY"
