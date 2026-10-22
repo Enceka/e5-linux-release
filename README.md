@@ -101,27 +101,34 @@ the build id still matches this source tree, and assembles the bundle with
 instead of falling back to the release binary. The bundle check then compares the
 image's `/usr/sbin/landscape-webserver` with that artifact byte for byte.
 
-### Two entry points, two kernel lines
+### One entry point, any kernel line
 
-`Build Landscape Router OpenWrt` builds the bundle on the 6.18 kernel and is the
-workflow everything else calls; `Build Landscape Router OpenWrt (7.2 kernel)`
-builds the same bundle on the E5's 7.2 kernel. The second is a caller, not a copy:
-it passes `source_ref: e5-7.2-experiment`, `kernel_ref: e5-7.2-experiment`
-and the 7.2
-manifest to the first, so the block-mount, daemon, kernel and image steps, their
-verification and their failure modes exist once. A change to the build is made
-there and both kernel lines get it.
+`Build Landscape Router OpenWrt` is the only entry point, and `kernel_ref`
+picks the kernel line it builds. The branch is named `e5-<line>-experiment`,
+where `<line>` is the kernel version with dots (`e5-6.18-experiment` by default,
+`e5-7.2-experiment` for the E5's 7.2 kernel); the `resolve` job strips an
+optional `owner/` prefix, rejects any other shape and derives the rest of the
+run from the line. `source_ref` is independent of it, because a kernel line may
+be built from any source branch. The block-mount, daemon, kernel and image
+steps, their verification and their failure modes exist once, so every kernel
+line gets the same build.
 
-What actually selects a kernel line is the manifest named by `kernel_manifest`.
-It pins the kernel revision the build is allowed to compile, and it is what
-`upstream/build.sh` and `upstream/check-kernel-source.py` read; the manifest in
-turn names the shared Landscape config fragment `upstream/e5-landscape.config`,
-so the release baseline `upstream/kernel-source.json` and its
-`e5-mainline.config` stay untouched for the published firmware. `kernel_line`
-does not build anything by itself — it only labels the run, which is why every
-artifact is named `...-<kernel line>-<run id>-<attempt>` and a 7.2 artifact can
-never be mistaken for a 6.18 one when a run is being inspected.
+What a kernel line builds is the manifest `upstream/kernel-source-<line>.json`,
+which `resolve` derives and checks before anything is compiled — a line that has
+no manifest fails the run with the path it expected, naming it, which is the
+proof that the line was actually provisioned. The manifest pins the kernel
+revision the build is allowed to compile, and it is what `upstream/build.sh` and
+`upstream/check-kernel-source.py` read; it in turn names the shared Landscape
+config fragment `upstream/e5-landscape.config`, so the release baseline
+`upstream/kernel-source.json` and its `e5-mainline.config` stay untouched for
+the published firmware. The derived line does not build anything by itself — it
+only labels the run, which is why every artifact is named
+`...-<kernel line>-<run id>-<attempt>` and a 7.2 artifact can never be mistaken
+for a 6.18 one when a run is being inspected.
 
-Both entry points start from the Actions UI with no input at all, and both take
-the OpenWrt and Landscape versions plus `keep_diagnostics`. The 7.2 entry point
-carries its own concurrency group, so dispatching one never cancels the other.
+Adding a kernel line therefore means creating the kernel branch
+`e5-<line>-experiment` and committing its manifest in the source repository —
+not editing the workflow. The run starts from the Actions UI with no input at
+all, and takes the OpenWrt and Landscape versions, `kernel_ref`,
+`source_ref` and `keep_diagnostics`. The concurrency group carries the kernel
+branch, so a 7.2 dispatch never cancels a 6.18 one.
