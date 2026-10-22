@@ -100,3 +100,27 @@ the build id still matches this source tree, and assembles the bundle with
 `E5_LANDSCAPE_DAEMON_REQUIRED=1`, so a missing or stale daemon fails the run
 instead of falling back to the release binary. The bundle check then compares the
 image's `/usr/sbin/landscape-webserver` with that artifact byte for byte.
+
+### Two entry points, two kernel lines
+
+`Build Landscape Router OpenWrt` builds the bundle on the 6.18 kernel and is the
+workflow everything else calls; `Build Landscape Router OpenWrt (7.2 kernel)`
+builds the same bundle on the E5's 7.2 kernel. The second is a caller, not a copy:
+it passes `source_ref: e5-7.2-experiment`, `kernel_ref: e5-7.2` and the 7.2
+manifest to the first, so the block-mount, daemon, kernel and image steps, their
+verification and their failure modes exist once. A change to the build is made
+there and both kernel lines get it.
+
+What actually selects a kernel line is the manifest named by `kernel_manifest`.
+It pins the kernel revision the build is allowed to compile, and it is what
+`upstream/build.sh` and `upstream/check-kernel-source.py` read; the manifest in
+turn names the shared Landscape config fragment `upstream/e5-landscape.config`,
+so the release baseline `upstream/kernel-source.json` and its
+`e5-mainline.config` stay untouched for the published firmware. `kernel_line`
+does not build anything by itself — it only labels the run, which is why every
+artifact is named `...-<kernel line>-<run id>-<attempt>` and a 7.2 artifact can
+never be mistaken for a 6.18 one when a run is being inspected.
+
+Both entry points start from the Actions UI with no input at all, and both take
+the OpenWrt and Landscape versions plus `keep_diagnostics`. The 7.2 entry point
+carries its own concurrency group, so dispatching one never cancels the other.
