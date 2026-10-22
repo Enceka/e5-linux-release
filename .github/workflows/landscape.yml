@@ -7,6 +7,12 @@ run-name: Landscape ${{ inputs.landscape_version || '0.26.3' }} · OpenWrt ${{ i
 # by a landscape image) and nothing is published.  It produces one bundle,
 # e5-openwrt-flash-<openwrt>-landscape-<timestamp>-<source>.zip into the run's
 # artifacts.  Not triggered by tags.
+#
+# Three jobs feed the image, each on the runner that suits it: the guarded
+# block-mount APK and the patched Landscape daemon are built on their own and
+# verified again where they are used, so the image job never silently falls
+# back to the upstream daemon, which has no IPv6 on this device's modem
+# uplink (docs/LANDSCAPE-V6-NAT-20261021.zh-CN.md in the source repository).
 on:
   workflow_dispatch:
     inputs:
@@ -15,7 +21,7 @@ on:
         default: '25.12.5'
         required: true
       landscape_version:
-        description: Landscape Router release (pinned by SHA-256 in the source)
+        description: Landscape Router release (the web UI and the redirect handler; the daemon is built from the pinned commit)
         default: '0.26.3'
         required: true
       source_ref:
@@ -111,6 +117,112 @@ jobs:
             e5-linux/out/openwrt/block-mount-guarded.apk.build-id
           if-no-files-found: error
           compression-level: 0
+
+  daemon:
+    # The release's own landscape-webserver drops every IPv6 packet on a WAN
+    # link that has no bound IPv6 address, which is this device's modem uplink
+    # (docs/LANDSCAPE-V6-NAT-20261021.zh-CN.md in the source repository).  The
+    # image therefore ships a daemon built from a pinned upstream commit with
+    # the E5's patches, and this job is where that binary comes from.  It needs
+    # only the source, so it runs next to the kernel build.
+    needs: resolve
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 150
+    defaults:
+      run:
+        working-directory: e5-linux
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ env.E5_SOURCE_REPOSITORY }}
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          path: e5-linux
+          persist-credentials: false
+      - name: Check the daemon sources
+        run: |
+          sh -n openwrt/build-landscape.sh openwrt/build-landscape-inner.sh
+          test -s openwrt/patches/landscape-v6-nat-without-wan-binding.patch || {
+            echo '::error::openwrt/patches has no IPv6 NAT patch'; exit 1; }
+          # landscape_version names the release the web UI and the redirect
+          # handler come from; the daemon is built from the commit the source
+          # pins for that same version.  Bumping one without the other is a
+          # mismatch the image job would reject, so fail before the Rust build.
+          grep -qx "LS_VER=$E5_LANDSCAPE_VER" openwrt/build-landscape.sh || {
+            echo "::error::landscape_version=$E5_LANDSCAPE_VER is not the version openwrt/build-landscape.sh pins"; exit 1; }
+          # The build id is what the image job compares its artifact against.
+          sh openwrt/build-landscape.sh --build-id
+      - name: Restore the crate registry
+        # Each run starts on a fresh runner and the Rust build is the slow
+        # part; build-landscape.sh takes this directory instead of a Docker
+        # volume when E5_LANDSCAPE_CARGO names a path.  The key names the
+        # pinned commit, so a new pin restores into the same cache instead of
+        # downloading every crate again.
+        id: cargo
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: e5-linux/work/landscape-cargo
+          key: landscape-cargo-${{ runner.os }}-${{ runner.arch }}-e9f019b5-${{ hashFiles('e5-linux/openwrt/landscape.Dockerfile', 'e5-linux/openwrt/build-landscape.sh') }}
+          restore-keys: |
+            landscape-cargo-${{ runner.os }}-${{ runner.arch }}-e9f019b5-
+            landscape-cargo-${{ runner.os }}-${{ runner.arch }}-
+      - name: Build the patched Landscape daemon
+        env:
+          E5_LANDSCAPE_CARGO: ${{ github.workspace }}/e5-linux/work/landscape-cargo
+        run: |
+          set -o pipefail
+          mkdir -p out/release work/landscape-cargo
+          # The first build in a run compiles the Rust tree and pulls the
+          # Alpine sysroot; the log is uploaded if it fails.
+          sh openwrt/build-landscape.sh 2>&1 | tee out/release/landscape-build.log
+      - name: Hand the crate registry back to the runner user
+        # The container runs as root and writes root-owned files into the bind
+        # mount; actions/cache runs as the runner user and could not read
+        # them.
+        if: steps.cargo.outputs.cache-hit != 'true'
+        run: sudo chown -R "$(id -u):$(id -g)" work/landscape-cargo
+      - name: Save the crate registry
+        if: steps.cargo.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: e5-linux/work/landscape-cargo
+          key: ${{ steps.cargo.outputs.cache-primary-key }}
+      - name: Verify the patched daemon
+        run: |
+          d=out/openwrt/landscape-webserver-aarch64-static
+          for f in "$d" "$d.sha256" "$d.build-id" "$d.patches"; do
+            test -s "$f" || { echo "::error::the build left no $f"; exit 1; }
+          done
+          echo "$(cat "$d.sha256")  $d" | sha256sum -c -
+          file "$d" | grep -q 'ARM aarch64' || { echo '::error::the daemon is not an aarch64 ELF'; exit 1; }
+          # The build id and the provenance are what the image job cannot tell
+          # from the binary: which commit and which patches it came from.
+          test "$(cat "$d.build-id")" = "$(sh openwrt/build-landscape.sh --build-id)" || {
+            echo '::error::the daemon build id is not the one its inputs produce'; exit 1; }
+          grep -qx 'commit e9f019b5ff3b5306a7b336ee36693ca374618480' "$d.patches" || {
+            echo '::error::the daemon was not built from the pinned commit'; exit 1; }
+          for p in openwrt/patches/landscape-*.patch; do
+            grep -qx "patch $(basename "$p") $(sha256sum "$p" | cut -d' ' -f1)" "$d.patches" || {
+              echo "::error::the daemon was not built with $p"; exit 1; }
+          done
+          echo "daemon $(cat "$d.sha256") (build $(cat "$d.build-id"))"
+      - name: Upload the patched Landscape daemon
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: landscape-daemon-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            e5-linux/out/openwrt/landscape-webserver-aarch64-static
+            e5-linux/out/openwrt/landscape-webserver-aarch64-static.sha256
+            e5-linux/out/openwrt/landscape-webserver-aarch64-static.build-id
+            e5-linux/out/openwrt/landscape-webserver-aarch64-static.patches
+          if-no-files-found: error
+          compression-level: 0
+      - name: Upload the daemon build log
+        if: failure() || inputs.keep_diagnostics
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: landscape-daemon-log-${{ github.run_id }}-${{ github.run_attempt }}
+          path: e5-linux/out/release/landscape-build.log
+          if-no-files-found: ignore
 
   kernel:
     needs: [resolve, blockmount]
@@ -250,7 +362,10 @@ jobs:
           compression-level: 0
 
   image:
-    needs: [resolve, kernel]
+    # The daemon job builds and verifies the patched binary on its own; this
+    # job only restores it, so a failure there is visible as a missing
+    # artifact rather than as an image that quietly carries the release's.
+    needs: [resolve, kernel, daemon]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 300
     defaults:
@@ -286,6 +401,28 @@ jobs:
         with:
           name: landscape-kernel-${{ github.run_id }}-${{ github.run_attempt }}
           path: e5-linux/upstream/out-release
+      - name: Restore the patched Landscape daemon
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: landscape-daemon-${{ github.run_id }}-${{ github.run_attempt }}
+          path: e5-linux/out/openwrt
+      - name: Verify the patched Landscape daemon
+        run: |
+          d=out/openwrt/landscape-webserver-aarch64-static
+          for f in "$d" "$d.sha256" "$d.build-id" "$d.patches"; do
+            test -s "$f" || { echo "::error::the daemon artifact has no $f"; exit 1; }
+          done
+          echo "$(cat "$d.sha256")  $d" | sha256sum -c -
+          test "$(cat "$d.build-id")" = "$(sh openwrt/build-landscape.sh --build-id)" || {
+            echo '::error::the daemon artifact does not match this source tree'; exit 1; }
+          grep -qx 'commit e9f019b5ff3b5306a7b336ee36693ca374618480' "$d.patches" || {
+            echo '::error::the daemon artifact was not built from the pinned commit'; exit 1; }
+          # The web UI and the redirect handler come from the release named by
+          # landscape_version; the daemon comes from the pinned commit.  Mixing
+          # the two versions is a mismatch, not a supported combination.
+          grep -qx "landscape $E5_LANDSCAPE_VER" "$d.patches" || {
+            echo "::error::landscape_version=$E5_LANDSCAPE_VER does not match the daemon: $(head -1 "$d.patches")"; exit 1; }
+          echo "daemon $(cat "$d.sha256") (build $(cat "$d.build-id"))"
       - name: Verify the compiled kernel
         run: |
           for f in Image.lk kernel.release modules.tar config; do
@@ -347,6 +484,10 @@ jobs:
           # package is source-only on purpose (installer/README.md); the
           # release workflow supplies both GUI artifacts instead.
           OPENWRT_GUI_OPTIONAL: '1'
+          # The daemon was restored and verified above: refuse to assemble an
+          # image without it instead of shipping the release binary, which
+          # has no IPv6 on this device's modem uplink.
+          E5_LANDSCAPE_DAEMON_REQUIRED: '1'
         run: |
           set -o pipefail
           mkdir -p out/release
@@ -355,7 +496,15 @@ jobs:
           bash openwrt/make-flash-bundle.sh 2>&1 | tee out/release/bundle-build.log
       - name: Verify the Landscape bundle
         run: |
-          python3 tools/tests/landscape-bundle.py
+          # The bundle that was just written, not a synthetic one: this is the
+          # archive a recipient flashes.  --daemon proves the image carries the
+          # patched binary byte for byte, not merely some aarch64 daemon.
+          bundle=$(ls out/openwrt/e5-openwrt-*-landscape-*.zip)
+          test "$(printf '%s\n' "$bundle" | wc -l)" = 1 || {
+            echo '::error::expected exactly one Landscape bundle'; exit 1; }
+          python3 tools/tests/landscape-bundle.py \
+            --bundle "$bundle" \
+            --daemon out/openwrt/landscape-webserver-aarch64-static
       - name: Upload Landscape bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -376,6 +525,7 @@ jobs:
             e5-linux/out/release/*.log
             e5-linux/upstream/out-release/config
             e5-linux/out/openwrt/*landscape*.zip.sha256
+            e5-linux/out/openwrt/landscape-webserver-aarch64-static.patches
           if-no-files-found: ignore
 
       - name: Summarize
@@ -387,6 +537,10 @@ jobs:
             echo "- kernel: \`${{ needs.resolve.outputs.kernel_sha }}\`"
             echo "- Landscape: \`$E5_LANDSCAPE_VER\`"
             echo "- OpenWrt: \`$E5_WRT_VER\`"
+            d=out/openwrt/landscape-webserver-aarch64-static
+            if [ -s "$d.sha256" ]; then
+              echo "- daemon: \`$(cat "$d.sha256")\` (build \`$(cat "$d.build-id")\`, $(sed -n 's/^patch \([^ ]*\) .*/\1/p' "$d.patches" | tr '\n' ' '))"
+            fi
             echo
             ls -l out/openwrt/*landscape*.zip 2>/dev/null || true
           } >> "$GITHUB_STEP_SUMMARY"

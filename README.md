@@ -84,3 +84,19 @@ ModemManager, BlueZ and hostapd are built in one step against the same
 Their APKs and the Wi-Fi APKs share one cache entry: a cache hit skips the whole
 step and the image assembly reuses the restored APKs instead of rebuilding hostapd
 in a fresh tree.
+
+## Landscape daemon
+
+The Landscape image does not ship the release's `landscape-webserver`. 0.26.3 drops
+every IPv6 packet on a WAN link that has no bound IPv6 address, which is this
+device's modem uplink, so the image carries a daemon built from the pinned upstream
+commit `e9f019b5` with the patches in the source repository's `openwrt/patches`.
+
+`Build Landscape Router OpenWrt` builds it in its own `daemon` job
+(`openwrt/build-landscape.sh`, which pins the commit and its tree hash and applies
+every `openwrt/patches/landscape-*.patch`). The job uploads the binary with its
+SHA-256, its build id and a provenance file; the image job restores it, checks that
+the build id still matches this source tree, and assembles the bundle with
+`E5_LANDSCAPE_DAEMON_REQUIRED=1`, so a missing or stale daemon fails the run
+instead of falling back to the release binary. The bundle check then compares the
+image's `/usr/sbin/landscape-webserver` with that artifact byte for byte.
