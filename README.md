@@ -106,7 +106,8 @@ image's `/usr/sbin/landscape-webserver` with that artifact byte for byte.
 `Build Landscape Router OpenWrt` builds the bundle on the 6.18 kernel and is the
 workflow everything else calls; `Build Landscape Router OpenWrt (7.2 kernel)`
 builds the same bundle on the E5's 7.2 kernel. The second is a caller, not a copy:
-it passes `source_ref: e5-7.2-experiment`, `kernel_ref: e5-7.2` and the 7.2
+it passes `source_ref: e5-7.2-experiment`, `kernel_ref: e5-7.2-experiment`
+and the 7.2
 manifest to the first, so the block-mount, daemon, kernel and image steps, their
 verification and their failure modes exist once. A change to the build is made
 there and both kernel lines get it.

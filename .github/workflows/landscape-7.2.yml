@@ -1,7 +1,7 @@
 # The 7.2 entry point: the same Landscape bundle as landscape.yml, but built
-# from the source repository's 7.2 experiment branch, the e5-7.2 kernel branch
-# and the 7.2 manifest (upstream/kernel-source-7.2.json), which pins the kernel
-# revision and selects the shared Landscape config fragment.
+# from the source repository's 7.2 experiment branch, the e5-7.2-experiment
+# kernel branch and the 7.2 manifest (upstream/kernel-source-7.2.json), which
+# pins the kernel revision and selects the shared Landscape config fragment.
 #
 # This file is a caller only.  The build logic lives in landscape.yml and is
 # not duplicated here: a change there applies to both kernel lines.
@@ -41,7 +41,7 @@ jobs:
     uses: ./.github/workflows/landscape.yml
     with:
       source_ref: e5-7.2-experiment
-      kernel_ref: e5-7.2
+      kernel_ref: e5-7.2-experiment
       kernel_line: '7.2'
       kernel_manifest: upstream/kernel-source-7.2.json
       openwrt_version: ${{ inputs.openwrt_version || '25.12.5' }}
